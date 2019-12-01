@@ -2,7 +2,7 @@ const INPUT: &str = include_str!("../input.txt");
 
 // formula mass -> fuel
 fn module_fuel(mass: i32) -> i32 {
-  ((mass / 3) as f32).round() as i32 - 2
+  mass / 3 - 2
 }
 
 // total fuel required
