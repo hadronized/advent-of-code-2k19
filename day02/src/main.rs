@@ -64,11 +64,15 @@ fn main() {
 
   println!("1st answer: {}", program[0]);
 
-  'outer: for noun in 0..99 {
-    for verb in 0..99 {
-      let mut program = get_program().unwrap();
+  let initial_program = get_program().unwrap();
+  let mut program = Vec::with_capacity(initial_program.len());
+  'outer: for noun in 0..=99 {
+    for verb in 0..=99 {
+      program.clear();
+      program.extend_from_slice(&initial_program);
       program[1] = noun;
       program[2] = verb;
+
       run_program(&mut program).unwrap();
 
       if program[0] == 19690720 {
