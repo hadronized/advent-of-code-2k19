@@ -217,7 +217,12 @@ impl Program {
       memory[ip + 2]
     };
 
-    memory[ip + 3] = pred(op1, op2) as Word;
+    let output_idx = memory[ip + 3] as usize;
+
+    *memory
+      .get_mut(output_idx)
+      .ok_or(format!("write out of bounds: {}", ip + 3))? = pred(op1, op2) as Word;
+
     Ok(IPControl::Increase(4))
   }
 

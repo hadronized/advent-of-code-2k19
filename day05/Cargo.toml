@@ -1,0 +1,15 @@
+[package]
+name = "day05"
+version = "0.1.0"
+authors = ["Dimitri Sabadie <dimitri.sabadie@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+part-1 = []
+part-2 = []
+
+[dependencies]
+intcode = { path = "../intcode" }
+
