@@ -236,7 +236,6 @@ impl Program {
       match suspended {
         Suspended::Running { inputs, output, ip } => {
           suspended = self.rerun_suspended(inputs, output, ip)?;
-          println!("suspended 2: {:?}", suspended);
         }
 
         Suspended::Halted { output } => {
@@ -244,6 +243,12 @@ impl Program {
         }
       }
     }
+  }
+
+  /// Run and suspend.
+  pub fn run_suspended(&mut self, inputs: &[Word]) -> Result<Suspended, String> {
+    let inputs = inputs.to_owned();
+    self.rerun_suspended(inputs, None, 0)
   }
 
   /// Run until the program emits an output, suspending its state. Use the output variable to either
@@ -297,6 +302,14 @@ impl Program {
     Ok(Suspended::Halted { output })
   }
 
+  pub fn rerun(&mut self, suspended: Suspended) -> Result<Suspended, String> {
+    match suspended {
+      Suspended::Running { inputs, output, ip } => self.rerun_suspended(inputs, output, ip),
+
+      _ => Ok(suspended),
+    }
+  }
+
   fn update_ip(ip: IP, ip_ctrl: IPControl) -> IP {
     match ip_ctrl {
       IPControl::Increase(off) => (ip as isize + off) as usize,
@@ -308,7 +321,7 @@ impl Program {
 /// A suspended program.
 ///
 /// A suspended program can be re-run or killed.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Suspended {
   Running {
     inputs: Vec<Word>,
@@ -319,6 +332,15 @@ pub enum Suspended {
   Halted {
     output: Option<Word>,
   },
+}
+
+impl Suspended {
+  pub fn output(&self) -> Option<Word> {
+    match *self {
+      Suspended::Running { output, .. } => output,
+      Suspended::Halted { output } => output,
+    }
+  }
 }
 
 /// Instruction pointer control.
