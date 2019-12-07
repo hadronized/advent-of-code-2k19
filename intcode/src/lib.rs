@@ -129,7 +129,7 @@ impl Program {
     Ok(IPControl::Increase(2))
   }
 
-  fn perform_output(&mut self, ip: IP) -> Result<IPControl, String> {
+  fn perform_output(&mut self, ip: IP, output: &mut Word) -> Result<IPControl, String> {
     let memory = &mut self.memory;
 
     if ip + 1 >= memory.len() {
@@ -142,7 +142,7 @@ impl Program {
       return Err(format!("cannot store input at {}: out of bounds", addr));
     }
 
-    println!("{}", memory[addr]);
+    *output = memory[addr];
 
     Ok(IPControl::Increase(2))
   }
@@ -225,12 +225,38 @@ impl Program {
     Ok(IPControl::Increase(4))
   }
 
-  pub fn run(&mut self, mut inputs: &[Word]) -> Result<(), String> {
+  /// Run until the program halts.
+  pub fn run(&mut self, inputs: &[Word]) -> Result<Option<Word>, String> {
+    let inputs = inputs.to_owned();
+
+    let mut suspended = self.rerun_suspended(inputs, None, 0)?;
+    println!("suspended 1: {:?}", suspended);
+
+    loop {
+      match suspended {
+        Suspended::Running { inputs, output, ip } => {
+          suspended = self.rerun_suspended(inputs, output, ip)?;
+          println!("suspended 2: {:?}", suspended);
+        }
+
+        Suspended::Halted { output } => {
+          break Ok(output);
+        }
+      }
+    }
+  }
+
+  /// Run until the program emits an output, suspending its state. Use the output variable to either
+  /// kill the program, or continue.
+  fn rerun_suspended(
+    &mut self,
+    mut inputs: Vec<Word>,
+    mut output: Option<Word>,
+    mut ip: IP,
+  ) -> Result<Suspended, String> {
     if self.memory.is_empty() {
       return Err("no more data".to_owned());
     }
-
-    let mut ip = 0; // instruction pointer
 
     loop {
       let opcode = extract_op_code(self.memory[ip])?;
@@ -239,11 +265,21 @@ impl Program {
         OpCode::Add(mode_1, mode_2) => self.perform_op(ip, mode_1, mode_2, |a, b| a + b)?,
         OpCode::Mult(mode_1, mode_2) => self.perform_op(ip, mode_1, mode_2, |a, b| a * b)?,
         OpCode::GetInput => {
-          let ip_ctrl = self.perform_get_input(ip, inputs)?;
-          inputs = &inputs[1..];
+          let ip_ctrl = self.perform_get_input(ip, &inputs)?;
+          inputs.swap_remove(0);
           ip_ctrl
         }
-        OpCode::Output => self.perform_output(ip)?,
+
+        OpCode::Output => {
+          let mut out = 0;
+          let ip_ctrl = self.perform_output(ip, &mut out)?;
+          output = Some(out);
+
+          ip = Self::update_ip(ip, ip_ctrl);
+
+          return Ok(Suspended::Running { inputs, output, ip });
+        }
+
         OpCode::JumpIfTrue(mode_1, mode_2) => self.perform_jump(ip, mode_1, mode_2, true)?,
         OpCode::JumpIfFalse(mode_1, mode_2) => self.perform_jump(ip, mode_1, mode_2, false)?,
         OpCode::IfLT(mode_1, mode_2) => {
@@ -255,14 +291,34 @@ impl Program {
         OpCode::Halt => break,
       };
 
-      match ip_ctrl {
-        IPControl::Increase(off) => ip = (ip as isize + off) as usize,
-        IPControl::Manual(new_ip) => ip = new_ip,
-      }
+      ip = Self::update_ip(ip, ip_ctrl);
     }
 
-    Ok(())
+    Ok(Suspended::Halted { output })
   }
+
+  fn update_ip(ip: IP, ip_ctrl: IPControl) -> IP {
+    match ip_ctrl {
+      IPControl::Increase(off) => (ip as isize + off) as usize,
+      IPControl::Manual(new_ip) => new_ip,
+    }
+  }
+}
+
+/// A suspended program.
+///
+/// A suspended program can be re-run or killed.
+#[derive(Debug)]
+pub enum Suspended {
+  Running {
+    inputs: Vec<Word>,
+    output: Option<Word>,
+    ip: IP,
+  },
+
+  Halted {
+    output: Option<Word>,
+  },
 }
 
 /// Instruction pointer control.
