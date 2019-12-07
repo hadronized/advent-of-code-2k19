@@ -7,18 +7,16 @@ pub type Word = i64;
 #[derive(Debug)]
 pub struct Program {
   memory: Vec<Word>,
-  input: Word,
 }
 
 impl Program {
-  pub fn new(capacity: usize, user_input: Word) -> Self {
+  pub fn new(capacity: usize) -> Self {
     let memory = Vec::with_capacity(capacity);
-    let input = user_input;
 
-    Program { memory, input }
+    Program { memory }
   }
 
-  pub fn from_str<S>(input: S, user_input: Word) -> Result<Self, String>
+  pub fn from_str<S>(input: S) -> Result<Self, String>
   where
     S: AsRef<str>,
   {
@@ -29,10 +27,7 @@ impl Program {
       .map(|i| i.parse().map_err(|e| format!("cannot parse: {}", e)))
       .collect::<Result<_, _>>()?;
 
-    Ok(Program {
-      memory,
-      input: user_input,
-    })
+    Ok(Program { memory })
   }
 
   pub fn mem_size(&self) -> usize {
@@ -112,8 +107,12 @@ impl Program {
     Ok(IPControl::Increase(4))
   }
 
-  fn perform_get_input(&mut self, ip: IP) -> Result<IPControl, String> {
+  fn perform_get_input(&mut self, ip: IP, inputs: &[Word]) -> Result<IPControl, String> {
     let memory = &mut self.memory;
+
+    if inputs.is_empty() {
+      return Err("no input".to_owned());
+    }
 
     if ip + 1 >= memory.len() {
       return Err("operator is missing data".to_owned());
@@ -125,7 +124,7 @@ impl Program {
       return Err(format!("cannot store input at {}: out of bounds", addr));
     }
 
-    memory[addr] = self.input;
+    memory[addr] = inputs[0];
 
     Ok(IPControl::Increase(2))
   }
@@ -226,7 +225,7 @@ impl Program {
     Ok(IPControl::Increase(4))
   }
 
-  pub fn run(&mut self) -> Result<(), String> {
+  pub fn run(&mut self, mut inputs: &[Word]) -> Result<(), String> {
     if self.memory.is_empty() {
       return Err("no more data".to_owned());
     }
@@ -239,7 +238,11 @@ impl Program {
       let ip_ctrl = match opcode {
         OpCode::Add(mode_1, mode_2) => self.perform_op(ip, mode_1, mode_2, |a, b| a + b)?,
         OpCode::Mult(mode_1, mode_2) => self.perform_op(ip, mode_1, mode_2, |a, b| a * b)?,
-        OpCode::GetInput => self.perform_get_input(ip)?,
+        OpCode::GetInput => {
+          let ip_ctrl = self.perform_get_input(ip, inputs)?;
+          inputs = &inputs[1..];
+          ip_ctrl
+        }
         OpCode::Output => self.perform_output(ip)?,
         OpCode::JumpIfTrue(mode_1, mode_2) => self.perform_jump(ip, mode_1, mode_2, true)?,
         OpCode::JumpIfFalse(mode_1, mode_2) => self.perform_jump(ip, mode_1, mode_2, false)?,
