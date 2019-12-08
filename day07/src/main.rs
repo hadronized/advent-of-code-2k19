@@ -29,7 +29,6 @@ fn main() {
 
             let phase = [phase1, phase2, phase3, phase4, phase5];
 
-            println!("{:?}", phase);
             phases_combinations.push(phase);
           }
         }
@@ -42,14 +41,11 @@ fn main() {
   let mut thrusters_signal = 0;
 
   for phases in &phases_combinations {
-    println!("testing phases: {:?}", phases);
-
     let mut signal = 0;
 
     for amp in 0..=4 {
       program.mimick(&original_program);
       signal = program.run(&[phases[amp], signal]).unwrap().unwrap();
-      println!("{} amp’s signal: {}", amp, signal);
     }
 
     thrusters_signal = thrusters_signal.max(signal);
@@ -96,13 +92,10 @@ fn main() {
 
     // feedback loop
     loop {
-      println!("looping for phases {:?}", phases);
       for amp in 0..=4 {
-        println!("amp: {}", amp);
         // run the ACS
         suspended[amp] = acses[amp].rerun(suspended[amp].clone()).unwrap();
         let output = suspended[amp].output().unwrap();
-        println!("  -> output: {}", output);
 
         // provide the ACS output as input for the next ACS
         if let Suspended::Running { ref mut inputs, .. } = suspended[(amp + 1) % 5] {

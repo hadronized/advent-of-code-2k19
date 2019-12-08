@@ -230,7 +230,6 @@ impl Program {
     let inputs = inputs.to_owned();
 
     let mut suspended = self.rerun_suspended(inputs, None, 0)?;
-    println!("suspended 1: {:?}", suspended);
 
     loop {
       match suspended {
