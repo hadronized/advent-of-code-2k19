@@ -4,9 +4,9 @@ const HEIGHT: usize = 6;
 
 fn read_image(input: &str, width: usize, height: usize) -> Vec<Vec<u8>> {
   input
+    .trim()
     .as_bytes()
     .chunks(width * height)
-    .filter(|chunk| chunk.len() == WIDTH * HEIGHT)
     .map(|chunk| chunk.iter().cloned().collect())
     .collect()
 }
