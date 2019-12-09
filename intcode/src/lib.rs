@@ -61,6 +61,7 @@ impl Program {
     }
 
     self.memory[i] = w;
+
     Ok(())
   }
 
@@ -74,11 +75,9 @@ impl Program {
   where
     F: FnOnce(Word, Word) -> Word,
   {
-    let memory = &mut self.memory;
+    self.guard_memory_ip(ip, 3)?;
 
-    if ip + 3 >= memory.len() {
-      return Err("operator is missing data".to_owned());
-    }
+    let memory = &mut self.memory;
 
     let op1 = if let ParamMode::Position = mode_1 {
       *memory
@@ -108,14 +107,12 @@ impl Program {
   }
 
   fn perform_get_input(&mut self, ip: IP, inputs: &[Word]) -> Result<IPControl, String> {
+    self.guard_memory_ip(ip, 1)?;
+
     let memory = &mut self.memory;
 
     if inputs.is_empty() {
       return Err("no input".to_owned());
-    }
-
-    if ip + 1 >= memory.len() {
-      return Err("operator is missing data".to_owned());
     }
 
     let addr = memory[ip + 1] as usize;
@@ -154,11 +151,9 @@ impl Program {
     mode_2: ParamMode,
     truth: bool,
   ) -> Result<IPControl, String> {
-    let memory = &mut self.memory;
+    self.guard_memory_ip(ip, 2)?;
 
-    if ip + 2 >= memory.len() {
-      return Err("operator is missing data".to_owned());
-    }
+    let memory = &mut self.memory;
 
     let c = if let ParamMode::Position = mode_1 {
       *memory
@@ -194,11 +189,9 @@ impl Program {
   where
     F: FnOnce(Word, Word) -> bool,
   {
-    let memory = &mut self.memory;
+    self.guard_memory_ip(ip, 3)?;
 
-    if ip + 3 >= memory.len() {
-      return Err("operator is missing data".to_owned());
-    }
+    let memory = &mut self.memory;
 
     let op1 = if let ParamMode::Position = mode_1 {
       *memory
@@ -223,6 +216,20 @@ impl Program {
       .ok_or(format!("write out of bounds: {}", ip + 3))? = pred(op1, op2) as Word;
 
     Ok(IPControl::Increase(4))
+  }
+
+  /// Ensure the IP will not overflow memory.
+  fn guard_memory_ip(&self, ip: IP, offset: IPOffset) -> Result<(), String> {
+    let len = self.memory.len();
+
+    if ip + offset as usize >= len {
+      Err(format!(
+        "cannot execute instruction: IP={}, offset={}, memory={}",
+        ip, offset, len
+      ))
+    } else {
+      Ok(())
+    }
   }
 
   /// Run until the program halts.
@@ -267,7 +274,9 @@ impl Program {
 
       let ip_ctrl = match opcode {
         OpCode::Add(mode_1, mode_2) => self.perform_op(ip, mode_1, mode_2, |a, b| a + b)?,
+
         OpCode::Mult(mode_1, mode_2) => self.perform_op(ip, mode_1, mode_2, |a, b| a * b)?,
+
         OpCode::GetInput => {
           let ip_ctrl = self.perform_get_input(ip, &inputs)?;
           inputs.swap_remove(0);
@@ -285,13 +294,17 @@ impl Program {
         }
 
         OpCode::JumpIfTrue(mode_1, mode_2) => self.perform_jump(ip, mode_1, mode_2, true)?,
+
         OpCode::JumpIfFalse(mode_1, mode_2) => self.perform_jump(ip, mode_1, mode_2, false)?,
+
         OpCode::IfLT(mode_1, mode_2) => {
           self.perform_conditional(ip, mode_1, mode_2, |a, b| a < b)?
         }
+
         OpCode::IfEQ(mode_1, mode_2) => {
           self.perform_conditional(ip, mode_1, mode_2, |a, b| a == b)?
         }
+
         OpCode::Halt => break,
       };
 
