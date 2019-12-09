@@ -370,6 +370,7 @@ enum OpCode {
 enum ParamMode {
   Position,
   Immediate,
+  Relative,
 }
 
 impl TryFrom<Word> for ParamMode {
@@ -379,6 +380,7 @@ impl TryFrom<Word> for ParamMode {
     match w {
       0 => Ok(ParamMode::Position),
       1 => Ok(ParamMode::Immediate),
+      2 => Ok(ParamMode::Relative),
       _ => Err(format!("unsupported parameter mode: {}", w)),
     }
   }
