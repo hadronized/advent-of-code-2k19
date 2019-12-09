@@ -7,13 +7,21 @@ pub type Word = i64;
 #[derive(Debug)]
 pub struct Program {
   memory: Vec<Word>,
+  ip: IP,
+  rel_base: IPOffset,
 }
 
 impl Program {
   pub fn new(capacity: usize) -> Self {
     let memory = Vec::with_capacity(capacity);
+    let ip = 0;
+    let rel_base = 0;
 
-    Program { memory }
+    Program {
+      memory,
+      ip,
+      rel_base,
+    }
   }
 
   pub fn from_str<S>(input: S) -> Result<Self, String>
@@ -26,8 +34,14 @@ impl Program {
       .split(',')
       .map(|i| i.parse().map_err(|e| format!("cannot parse: {}", e)))
       .collect::<Result<_, _>>()?;
+    let ip = 0;
+    let rel_base = 0;
 
-    Ok(Program { memory })
+    Ok(Program {
+      memory,
+      ip,
+      rel_base,
+    })
   }
 
   pub fn mem_size(&self) -> usize {
@@ -37,6 +51,12 @@ impl Program {
   pub fn mimick(&mut self, other: &Self) {
     self.memory.clear();
     self.memory.extend_from_slice(&other.memory);
+    self.ip = 0;
+    self.rel_base = 0;
+  }
+
+  pub fn is_halted(&self) -> bool {
+    self.ip >= self.memory.len()
   }
 
   pub fn read(&self, i: usize) -> Result<Word, String> {
@@ -65,9 +85,23 @@ impl Program {
     Ok(())
   }
 
+  /// Ensure the IP will not overflow memory.
+  fn guard_memory_ip(&self, offset: IPOffset) -> Result<(), String> {
+    let len = self.memory.len();
+    let ip = self.ip;
+
+    if ip + offset as usize >= len {
+      Err(format!(
+        "cannot execute instruction: IP={}, offset={}, memory={}",
+        ip, offset, len
+      ))
+    } else {
+      Ok(())
+    }
+  }
+
   fn perform_op<F>(
     &mut self,
-    ip: IP,
     mode_1: ParamMode,
     mode_2: ParamMode,
     f: F,
@@ -75,7 +109,9 @@ impl Program {
   where
     F: FnOnce(Word, Word) -> Word,
   {
-    self.guard_memory_ip(ip, 3)?;
+    let ip = self.ip;
+
+    self.guard_memory_ip(3)?;
 
     let memory = &mut self.memory;
 
@@ -106,8 +142,10 @@ impl Program {
     Ok(IPControl::Increase(4))
   }
 
-  fn perform_get_input(&mut self, ip: IP, inputs: &[Word]) -> Result<IPControl, String> {
-    self.guard_memory_ip(ip, 1)?;
+  fn perform_get_input(&mut self, inputs: &[Word]) -> Result<IPControl, String> {
+    let ip = self.ip;
+
+    self.guard_memory_ip(1)?;
 
     let memory = &mut self.memory;
 
@@ -126,12 +164,12 @@ impl Program {
     Ok(IPControl::Increase(2))
   }
 
-  fn perform_output(&mut self, ip: IP, output: &mut Word) -> Result<IPControl, String> {
-    let memory = &mut self.memory;
+  fn perform_output(&mut self, output: &mut Word) -> Result<IPControl, String> {
+    let ip = self.ip;
 
-    if ip + 1 >= memory.len() {
-      return Err("operator is missing data".to_owned());
-    }
+    self.guard_memory_ip(1)?;
+
+    let memory = &mut self.memory;
 
     let addr = memory[ip + 1] as usize;
 
@@ -146,12 +184,13 @@ impl Program {
 
   fn perform_jump(
     &mut self,
-    ip: IP,
     mode_1: ParamMode,
     mode_2: ParamMode,
     truth: bool,
   ) -> Result<IPControl, String> {
-    self.guard_memory_ip(ip, 2)?;
+    let ip = self.ip;
+
+    self.guard_memory_ip(2)?;
 
     let memory = &mut self.memory;
 
@@ -181,7 +220,6 @@ impl Program {
 
   fn perform_conditional<F>(
     &mut self,
-    ip: IP,
     mode_1: ParamMode,
     mode_2: ParamMode,
     pred: F,
@@ -189,7 +227,9 @@ impl Program {
   where
     F: FnOnce(Word, Word) -> bool,
   {
-    self.guard_memory_ip(ip, 3)?;
+    let ip = self.ip;
+
+    self.guard_memory_ip(3)?;
 
     let memory = &mut self.memory;
 
@@ -218,30 +258,19 @@ impl Program {
     Ok(IPControl::Increase(4))
   }
 
-  /// Ensure the IP will not overflow memory.
-  fn guard_memory_ip(&self, ip: IP, offset: IPOffset) -> Result<(), String> {
-    let len = self.memory.len();
 
-    if ip + offset as usize >= len {
-      Err(format!(
-        "cannot execute instruction: IP={}, offset={}, memory={}",
-        ip, offset, len
-      ))
-    } else {
-      Ok(())
-    }
   }
 
   /// Run until the program halts.
   pub fn run(&mut self, inputs: &[Word]) -> Result<Option<Word>, String> {
     let inputs = inputs.to_owned();
 
-    let mut suspended = self.rerun_suspended(inputs, None, 0)?;
+    let mut suspended = self.rerun_suspended(inputs, None)?;
 
     loop {
       match suspended {
-        Suspended::Running { inputs, output, ip } => {
-          suspended = self.rerun_suspended(inputs, output, ip)?;
+        Suspended::Running { inputs, output } => {
+          suspended = self.rerun_suspended(inputs, output)?;
         }
 
         Suspended::Halted { output } => {
@@ -254,7 +283,7 @@ impl Program {
   /// Run and suspend.
   pub fn run_suspended(&mut self, inputs: &[Word]) -> Result<Suspended, String> {
     let inputs = inputs.to_owned();
-    self.rerun_suspended(inputs, None, 0)
+    self.rerun_suspended(inputs, None)
   }
 
   /// Run until the program emits an output, suspending its state. Use the output variable to either
@@ -263,52 +292,47 @@ impl Program {
     &mut self,
     mut inputs: Vec<Word>,
     mut output: Option<Word>,
-    mut ip: IP,
   ) -> Result<Suspended, String> {
     if self.memory.is_empty() {
       return Err("no more data".to_owned());
     }
 
     loop {
-      let opcode = extract_op_code(self.memory[ip])?;
+      let opcode = extract_op_code(self.memory[self.ip])?;
 
       let ip_ctrl = match opcode {
-        OpCode::Add(mode_1, mode_2) => self.perform_op(ip, mode_1, mode_2, |a, b| a + b)?,
+        OpCode::Add(mode_1, mode_2) => self.perform_op(mode_1, mode_2, |a, b| a + b)?,
 
-        OpCode::Mult(mode_1, mode_2) => self.perform_op(ip, mode_1, mode_2, |a, b| a * b)?,
+        OpCode::Mult(mode_1, mode_2) => self.perform_op(mode_1, mode_2, |a, b| a * b)?,
 
         OpCode::GetInput => {
-          let ip_ctrl = self.perform_get_input(ip, &inputs)?;
+          let ip_ctrl = self.perform_get_input(&inputs)?;
           inputs.swap_remove(0);
           ip_ctrl
         }
 
         OpCode::Output => {
           let mut out = 0;
-          let ip_ctrl = self.perform_output(ip, &mut out)?;
+          let ip_ctrl = self.perform_output(&mut out)?;
           output = Some(out);
 
-          ip = Self::update_ip(ip, ip_ctrl);
+          self.update_ip(ip_ctrl);
 
-          return Ok(Suspended::Running { inputs, output, ip });
+          return Ok(Suspended::Running { inputs, output });
         }
 
-        OpCode::JumpIfTrue(mode_1, mode_2) => self.perform_jump(ip, mode_1, mode_2, true)?,
+        OpCode::JumpIfTrue(mode_1, mode_2) => self.perform_jump(mode_1, mode_2, true)?,
 
-        OpCode::JumpIfFalse(mode_1, mode_2) => self.perform_jump(ip, mode_1, mode_2, false)?,
+        OpCode::JumpIfFalse(mode_1, mode_2) => self.perform_jump(mode_1, mode_2, false)?,
 
-        OpCode::IfLT(mode_1, mode_2) => {
-          self.perform_conditional(ip, mode_1, mode_2, |a, b| a < b)?
-        }
+        OpCode::IfLT(mode_1, mode_2) => self.perform_conditional(mode_1, mode_2, |a, b| a < b)?,
 
-        OpCode::IfEQ(mode_1, mode_2) => {
-          self.perform_conditional(ip, mode_1, mode_2, |a, b| a == b)?
-        }
+        OpCode::IfEQ(mode_1, mode_2) => self.perform_conditional(mode_1, mode_2, |a, b| a == b)?,
 
         OpCode::Halt => break,
       };
 
-      ip = Self::update_ip(ip, ip_ctrl);
+      self.update_ip(ip_ctrl);
     }
 
     Ok(Suspended::Halted { output })
@@ -316,17 +340,17 @@ impl Program {
 
   pub fn rerun(&mut self, suspended: Suspended) -> Result<Suspended, String> {
     match suspended {
-      Suspended::Running { inputs, output, ip } => self.rerun_suspended(inputs, output, ip),
+      Suspended::Running { inputs, output } => self.rerun_suspended(inputs, output),
 
       _ => Ok(suspended),
     }
   }
 
-  fn update_ip(ip: IP, ip_ctrl: IPControl) -> IP {
-    match ip_ctrl {
-      IPControl::Increase(off) => (ip as isize + off) as usize,
+  fn update_ip(&mut self, ip_ctrl: IPControl) {
+    self.ip = match ip_ctrl {
+      IPControl::Increase(off) => (self.ip as isize + off) as usize,
       IPControl::Manual(new_ip) => new_ip,
-    }
+    };
   }
 }
 
@@ -338,7 +362,6 @@ pub enum Suspended {
   Running {
     inputs: Vec<Word>,
     output: Option<Word>,
-    ip: IP,
   },
 
   Halted {
