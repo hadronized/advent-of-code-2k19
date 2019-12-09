@@ -1,5 +1,7 @@
 use std::convert::TryFrom;
 
+const DEFAULT_MEMORY_SIZE: usize = 10000;
+
 pub type IP = usize;
 pub type IPOffset = isize;
 pub type Word = i64;
@@ -30,12 +32,15 @@ impl Program {
   {
     let input = input.as_ref();
 
-    let memory = input
+    let mut memory: Vec<_> = input
       .split(',')
       .map(|i| i.parse().map_err(|e| format!("cannot parse: {}", e)))
       .collect::<Result<_, _>>()?;
     let ip = 0;
     let rel_base = 0;
+
+    // resize memory to make it bigger
+    memory.resize(DEFAULT_MEMORY_SIZE, 0);
 
     Ok(Program {
       memory,
@@ -100,84 +105,90 @@ impl Program {
     }
   }
 
+  /// Read an instruction operand based on the mode of the instruction.
+  fn read_operand(&self, offset: IPOffset, mode: ParamMode) -> Result<Word, String> {
+    let op = match mode {
+      ParamMode::Position => *self
+        .memory
+        .get(self.memory[self.ip + offset as usize] as usize)
+        .ok_or(format!(
+          "cannot read operand in position mode: {} + {}",
+          self.ip, offset
+        ))?,
+
+      ParamMode::Immediate => self.memory[self.ip + offset as usize],
+
+      ParamMode::Relative => *self
+        .memory
+        .get((self.rel_base + self.memory[self.ip + offset as usize] as isize) as usize)
+        .ok_or(format!(
+          "cannot read operand in relative mode: {} + {}, {}",
+          self.ip, offset, self.rel_base
+        ))?,
+    };
+
+    Ok(op)
+  }
+
+  /// Read an address operand based on the mode of the instruction.
+  fn read_addr_operand(&self, offset: IPOffset, mode: ParamMode) -> Result<Word, String> {
+    match mode {
+      ParamMode::Position => Ok(self.memory[self.ip + offset as usize]),
+
+      ParamMode::Immediate => Err("not supported in immediate mode".to_owned()),
+
+      ParamMode::Relative => Ok(self.rel_base as Word + self.memory[self.ip + offset as usize]),
+    }
+  }
+
   fn perform_op<F>(
     &mut self,
     mode_1: ParamMode,
     mode_2: ParamMode,
+    mode_3: ParamMode,
     f: F,
   ) -> Result<IPControl, String>
   where
     F: FnOnce(Word, Word) -> Word,
   {
-    let ip = self.ip;
-
     self.guard_memory_ip(3)?;
 
-    let memory = &mut self.memory;
-
-    let op1 = if let ParamMode::Position = mode_1 {
-      *memory
-        .get(memory[ip + 1] as usize)
-        .ok_or(format!("read 1 out of bounds: {}", ip + 1,))?
-    } else {
-      memory[ip + 1]
-    };
-
-    let op2 = if let ParamMode::Position = mode_2 {
-      *memory
-        .get(memory[ip + 2] as usize)
-        .ok_or(format!("read 2 out of bounds: {}", ip + 2))?
-    } else {
-      memory[ip + 2]
-    };
-
-    let output_idx = memory[ip + 3] as usize;
+    let op1 = self.read_operand(1, mode_1)?;
+    let op2 = self.read_operand(2, mode_2)?;
+    let output_idx = self.read_addr_operand(3, mode_3)? as usize;
 
     let output = f(op1, op2);
 
-    *memory
-      .get_mut(output_idx)
-      .ok_or(format!("write out of bounds: {}", output_idx))? = output;
+    self.write(output_idx, output)?;
 
     Ok(IPControl::Increase(4))
   }
 
-  fn perform_get_input(&mut self, inputs: &[Word]) -> Result<IPControl, String> {
-    let ip = self.ip;
-
+  fn perform_get_input(&mut self, inputs: &[Word], mode: ParamMode) -> Result<IPControl, String> {
     self.guard_memory_ip(1)?;
-
-    let memory = &mut self.memory;
 
     if inputs.is_empty() {
       return Err("no input".to_owned());
     }
 
-    let addr = memory[ip + 1] as usize;
+    let addr = self.read_addr_operand(1, mode)? as usize;
 
-    if addr >= memory.len() {
+    if addr >= self.memory.len() {
       return Err(format!("cannot store input at {}: out of bounds", addr));
     }
 
-    memory[addr] = inputs[0];
+    self.write(addr, inputs[0])?;
 
     Ok(IPControl::Increase(2))
   }
 
-  fn perform_output(&mut self, output: &mut Word) -> Result<IPControl, String> {
-    let ip = self.ip;
-
+  fn perform_output(&mut self, output: &mut Word, mode: ParamMode) -> Result<IPControl, String> {
     self.guard_memory_ip(1)?;
 
-    let memory = &mut self.memory;
+    let value = self.read_operand(1, mode)?;
 
-    let addr = memory[ip + 1] as usize;
-
-    if addr >= memory.len() {
-      return Err(format!("cannot store input at {}: out of bounds", addr));
-    }
-
-    *output = memory[addr];
+    *output = value;
+    eprintln!("output: {}", output);
 
     Ok(IPControl::Increase(2))
   }
@@ -188,30 +199,12 @@ impl Program {
     mode_2: ParamMode,
     truth: bool,
   ) -> Result<IPControl, String> {
-    let ip = self.ip;
-
     self.guard_memory_ip(2)?;
 
-    let memory = &mut self.memory;
-
-    let c = if let ParamMode::Position = mode_1 {
-      *memory
-        .get(memory[ip + 1] as usize)
-        .ok_or(format!("read 1 out of bound: {}", ip + 1))?
-        != 0
-    } else {
-      memory[ip + 1] != 0
-    };
+    let c = self.read_operand(1, mode_1)? != 0;
 
     if c == truth {
-      let new_ip = if let ParamMode::Position = mode_2 {
-        *memory
-          .get(memory[ip + 2] as usize)
-          .ok_or(format!("read 2 out of bounds: {}", ip + 2))? as IP
-      } else {
-        memory[ip + 2] as IP
-      };
-
+      let new_ip = self.read_operand(2, mode_2)? as IP;
       Ok(IPControl::Manual(new_ip))
     } else {
       Ok(IPControl::Increase(3))
@@ -222,43 +215,31 @@ impl Program {
     &mut self,
     mode_1: ParamMode,
     mode_2: ParamMode,
+    mode_3: ParamMode,
     pred: F,
   ) -> Result<IPControl, String>
   where
     F: FnOnce(Word, Word) -> bool,
   {
-    let ip = self.ip;
-
     self.guard_memory_ip(3)?;
 
-    let memory = &mut self.memory;
+    let op1 = self.read_operand(1, mode_1)?;
+    let op2 = self.read_operand(2, mode_2)?;
+    let output_idx = self.read_addr_operand(3, mode_3)? as usize;
 
-    let op1 = if let ParamMode::Position = mode_1 {
-      *memory
-        .get(memory[ip + 1] as usize)
-        .ok_or(format!("read 1 out of bounds: {}", ip + 1,))?
-    } else {
-      memory[ip + 1]
-    };
-
-    let op2 = if let ParamMode::Position = mode_2 {
-      *memory
-        .get(memory[ip + 2] as usize)
-        .ok_or(format!("read 2 out of bounds: {}", ip + 2))?
-    } else {
-      memory[ip + 2]
-    };
-
-    let output_idx = memory[ip + 3] as usize;
-
-    *memory
-      .get_mut(output_idx)
-      .ok_or(format!("write out of bounds: {}", ip + 3))? = pred(op1, op2) as Word;
+    self.write(output_idx, pred(op1, op2) as Word)?;
 
     Ok(IPControl::Increase(4))
   }
 
+  fn perform_adjust_rel_base(&mut self, mode: ParamMode) -> Result<IPControl, String> {
+    self.guard_memory_ip(1)?;
 
+    let new_base_offset = self.read_operand(1, mode)?;
+
+    self.rel_base += new_base_offset as isize;
+
+    Ok(IPControl::Increase(2))
   }
 
   /// Run until the program halts.
@@ -301,19 +282,23 @@ impl Program {
       let opcode = extract_op_code(self.memory[self.ip])?;
 
       let ip_ctrl = match opcode {
-        OpCode::Add(mode_1, mode_2) => self.perform_op(mode_1, mode_2, |a, b| a + b)?,
+        OpCode::Add(mode_1, mode_2, mode_3) => {
+          self.perform_op(mode_1, mode_2, mode_3, |a, b| a + b)?
+        }
 
-        OpCode::Mult(mode_1, mode_2) => self.perform_op(mode_1, mode_2, |a, b| a * b)?,
+        OpCode::Mult(mode_1, mode_2, mode_3) => {
+          self.perform_op(mode_1, mode_2, mode_3, |a, b| a * b)?
+        }
 
-        OpCode::GetInput => {
-          let ip_ctrl = self.perform_get_input(&inputs)?;
+        OpCode::GetInput(mode) => {
+          let ip_ctrl = self.perform_get_input(&inputs, mode)?;
           inputs.swap_remove(0);
           ip_ctrl
         }
 
-        OpCode::Output => {
+        OpCode::Output(mode) => {
           let mut out = 0;
-          let ip_ctrl = self.perform_output(&mut out)?;
+          let ip_ctrl = self.perform_output(&mut out, mode)?;
           output = Some(out);
 
           self.update_ip(ip_ctrl);
@@ -325,9 +310,15 @@ impl Program {
 
         OpCode::JumpIfFalse(mode_1, mode_2) => self.perform_jump(mode_1, mode_2, false)?,
 
-        OpCode::IfLT(mode_1, mode_2) => self.perform_conditional(mode_1, mode_2, |a, b| a < b)?,
+        OpCode::IfLT(mode_1, mode_2, mode_3) => {
+          self.perform_conditional(mode_1, mode_2, mode_3, |a, b| a < b)?
+        }
 
-        OpCode::IfEQ(mode_1, mode_2) => self.perform_conditional(mode_1, mode_2, |a, b| a == b)?,
+        OpCode::IfEQ(mode_1, mode_2, mode_3) => {
+          self.perform_conditional(mode_1, mode_2, mode_3, |a, b| a == b)?
+        }
+
+        OpCode::AdjustRelBase(mode) => self.perform_adjust_rel_base(mode)?,
 
         OpCode::Halt => break,
       };
@@ -391,14 +382,15 @@ enum IPControl {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum OpCode {
-  Add(ParamMode, ParamMode),  // last is immediate
-  Mult(ParamMode, ParamMode), // last is immediate
-  GetInput,                   // always immediate
-  Output,                     // same
+  Add(ParamMode, ParamMode, ParamMode),
+  Mult(ParamMode, ParamMode, ParamMode),
+  GetInput(ParamMode),
+  Output(ParamMode),
   JumpIfTrue(ParamMode, ParamMode),
   JumpIfFalse(ParamMode, ParamMode),
-  IfLT(ParamMode, ParamMode),
-  IfEQ(ParamMode, ParamMode),
+  IfLT(ParamMode, ParamMode, ParamMode),
+  IfEQ(ParamMode, ParamMode, ParamMode),
+  AdjustRelBase(ParamMode),
   Halt, // the world makes no sense
 }
 
@@ -426,50 +418,70 @@ fn extract_op_code(w: Word) -> Result<OpCode, String> {
   match w % 100 {
     // addition
     1 => {
-      let mode_1 = ParamMode::try_from((w / 100) & 0x1)?;
-      let mode_2 = ParamMode::try_from((w / 1000) & 0x1)?;
-      Ok(OpCode::Add(mode_1, mode_2))
+      let mode_1 = ParamMode::try_from((w / 100) % 10)?;
+      let mode_2 = ParamMode::try_from((w / 1000) % 10)?;
+      let mode_3 = ParamMode::try_from((w / 10000) % 10)?;
+      Ok(OpCode::Add(mode_1, mode_2, mode_3))
     }
 
     // multiplication
     2 => {
-      let mode_1 = ParamMode::try_from((w / 100) & 0x1)?;
-      let mode_2 = ParamMode::try_from((w / 1000) & 0x1)?;
-      Ok(OpCode::Mult(mode_1, mode_2))
+      let mode_1 = ParamMode::try_from((w / 100) % 10)?;
+      let mode_2 = ParamMode::try_from((w / 1000) % 10)?;
+      let mode_3 = ParamMode::try_from((w / 10000) % 10)?;
+      Ok(OpCode::Mult(mode_1, mode_2, mode_3))
     }
 
     // get input
-    3 => Ok(OpCode::GetInput),
+    3 => {
+      let mode = ParamMode::try_from((w / 100) % 10)?;
+      Ok(OpCode::GetInput(mode))
+    }
 
     // output
-    4 => Ok(OpCode::Output),
+    4 => {
+      let mode = ParamMode::try_from((w / 100) % 10)?;
+      Ok(OpCode::Output(mode))
+    }
 
     // jump if true
     5 => {
-      let mode_1 = ParamMode::try_from((w / 100) & 0x1)?;
-      let mode_2 = ParamMode::try_from((w / 1000) & 0x1)?;
+      let mode_1 = ParamMode::try_from((w / 100) % 10)?;
+      let mode_2 = ParamMode::try_from((w / 1000) % 10)?;
+
       Ok(OpCode::JumpIfTrue(mode_1, mode_2))
     }
 
     // jump if false
     6 => {
-      let mode_1 = ParamMode::try_from((w / 100) & 0x1)?;
-      let mode_2 = ParamMode::try_from((w / 1000) & 0x1)?;
+      let mode_1 = ParamMode::try_from((w / 100) % 10)?;
+      let mode_2 = ParamMode::try_from((w / 1000) % 10)?;
+
       Ok(OpCode::JumpIfFalse(mode_1, mode_2))
     }
 
     // if less than
     7 => {
-      let mode_1 = ParamMode::try_from((w / 100) & 0x1)?;
-      let mode_2 = ParamMode::try_from((w / 1000) & 0x1)?;
-      Ok(OpCode::IfLT(mode_1, mode_2))
+      let mode_1 = ParamMode::try_from((w / 100) % 10)?;
+      let mode_2 = ParamMode::try_from((w / 1000) % 10)?;
+      let mode_3 = ParamMode::try_from((w / 10000) % 10)?;
+
+      Ok(OpCode::IfLT(mode_1, mode_2, mode_3))
     }
 
     // if equals
     8 => {
-      let mode_1 = ParamMode::try_from((w / 100) & 0x1)?;
-      let mode_2 = ParamMode::try_from((w / 1000) & 0x1)?;
-      Ok(OpCode::IfEQ(mode_1, mode_2))
+      let mode_1 = ParamMode::try_from((w / 100) % 10)?;
+      let mode_2 = ParamMode::try_from((w / 1000) % 10)?;
+      let mode_3 = ParamMode::try_from((w / 10000) % 10)?;
+
+      Ok(OpCode::IfEQ(mode_1, mode_2, mode_3))
+    }
+
+    // adjust relative base
+    9 => {
+      let mode = ParamMode::try_from((w / 100) % 10)?;
+      Ok(OpCode::AdjustRelBase(mode))
     }
 
     // halt
