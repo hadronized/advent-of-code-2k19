@@ -188,7 +188,6 @@ impl Program {
     let value = self.read_operand(1, mode)?;
 
     *output = value;
-    eprintln!("output: {}", output);
 
     Ok(IPControl::Increase(2))
   }
